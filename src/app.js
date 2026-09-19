@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import mongoose from "mongoose";
+import v1Routes from "./routes/v1/index.js";
 
 const app = express();
 
@@ -18,6 +19,11 @@ app.use(morgan("dev"));
 // Parse JSON request bodies
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+
+
+app.use("/api/v1", v1Routes);
+
 
 // API health check
 app.get("/api/v1/health", (req, res) => {
