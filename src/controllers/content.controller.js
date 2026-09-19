@@ -3,6 +3,7 @@ import {
   getYouTubeVideoDetails
 } from "../services/youtube.service.js";
 import { filterYouTubeContent } from "../utils/ContentFilter.js";
+import Content from "../models/Content.js";
 
 const ALLOWED_ORDERS = [
   "relevance",
