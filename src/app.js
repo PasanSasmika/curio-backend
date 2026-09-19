@@ -4,6 +4,8 @@ import helmet from "helmet";
 import morgan from "morgan";
 import mongoose from "mongoose";
 import v1Routes from "./routes/v1/index.js";
+import { notFound } from "./middleware/notFound.middleware.js";
+import { errorHandler } from "./middleware/error.middleware.js";
 
 const app = express();
 
@@ -40,5 +42,6 @@ app.get("/api/v1/health", (req, res) => {
   });
 });
 
-
+app.use(notFound);
+app.use(errorHandler);
 export default app;
