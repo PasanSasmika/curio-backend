@@ -3,7 +3,10 @@ import {
   getYouTubeVideoDetails,
 } from "../services/youtube.service.js";
 
-import { filterYouTubeContent } from "../utils/contentFilter.js";
+import {
+  filterYouTubeContent,
+  SHORT_DURATION_REGEX,
+} from "../utils/contentFilter.js";
 import Content from "../models/Content.js";
 
 const ALLOWED_ORDERS = [
@@ -12,6 +15,12 @@ const ALLOWED_ORDERS = [
   "rating",
   "viewCount",
 ];
+
+const SORT_OPTIONS = {
+  new: { publishedAt: -1, createdAt: -1 },
+  viewed: { viewCount: -1, publishedAt: -1 },
+  recent: { createdAt: -1 },
+};
 
 const MAX_HOME_PAGES = 6;
 const DEFAULT_LIMIT = 10;
@@ -227,6 +236,7 @@ export const getContent = async (
       page = "1",
       limit = String(DEFAULT_LIMIT),
       refresh = "false",
+      sort = "new",
     } = req.query;
 
     const parsedPage = Number(page);
@@ -263,7 +273,20 @@ export const getContent = async (
       });
     }
 
-    const filter = {};
+    if (!SORT_OPTIONS[sort]) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid sort. Allowed values: ${Object.keys(
+          SORT_OPTIONS
+        ).join(", ")}`,
+      });
+    }
+
+    // Hide Shorts/reels that were saved before the filter existed.
+    const filter = {
+      duration: { $not: SHORT_DURATION_REGEX },
+      title: { $not: /#shorts?/i },
+    };
 
     if (interest && interest.trim()) {
       filter.interest =
@@ -297,10 +320,7 @@ export const getContent = async (
     const [content, total] =
       await Promise.all([
         Content.find(filter)
-          .sort({
-            publishedAt: -1,
-            createdAt: -1,
-          })
+          .sort(SORT_OPTIONS[sort])
           .skip(skip)
           .limit(parsedLimit)
           .lean(),
@@ -470,6 +490,7 @@ export const discoverContent = async (
     const existingContent =
       await Content.find({
         interest: interest.trim(),
+        duration: { $not: SHORT_DURATION_REGEX },
       })
         .sort({
           publishedAt: -1,
@@ -535,6 +556,50 @@ export const discoverContent = async (
         message:
           "YouTube is temporarily rate limited. Please try again later.",
         data: [],
+      });
+    }
+
+    next(error);
+  }
+};
+
+export const getContentById = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { id } = req.params;
+
+    let video = await Content.findOne({
+      videoId: id,
+    }).lean();
+
+    // Search results are not stored, so fall back to YouTube.
+    if (!video) {
+      const [details] = await buildYouTubeVideos({
+        items: [{ id: { videoId: id } }],
+      });
+
+      video = details || null;
+    }
+
+    if (!video) {
+      return res.status(404).json({
+        success: false,
+        message: "Video not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: video,
+    });
+  } catch (error) {
+    if (error.status === 429 || error.status === 403) {
+      return res.status(error.status).json({
+        success: false,
+        message: error.message,
       });
     }
 

@@ -100,3 +100,27 @@ export const getYouTubeVideoDetails = async (
     throw error;
   }
 };
+export const getYouTubeSuggestions = async (query) => {
+  if (!query || !query.trim()) {
+    return [];
+  }
+
+  // Same autocomplete YouTube's search box uses; costs no API quota.
+  const response = await axios.get(
+    "https://suggestqueries.google.com/complete/search",
+    {
+      params: {
+        client: "firefox",
+        ds: "yt",
+        q: query.trim(),
+      },
+      timeout: 5000,
+    }
+  );
+
+  const suggestions = response.data?.[1];
+
+  return Array.isArray(suggestions)
+    ? suggestions.slice(0, 10)
+    : [];
+};

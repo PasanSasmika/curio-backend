@@ -1,3 +1,8 @@
+export const SHORTS_MAX_SECONDS = 180;
+
+/* Mongo regex matching ISO durations of 2:59 or less (PT45S, PT2M10S). */
+export const SHORT_DURATION_REGEX = /^PT(?:[0-2]M(?:\d+S)?|\d+S)$/;
+
 export const filterYouTubeContent = (
   videos
 ) => {
@@ -25,7 +30,7 @@ export const filterYouTubeContent = (
     }
 
     /*
-     * Remove videos shorter than 60 seconds.
+     * Remove Shorts / reels (up to 3 minutes).
      */
     if (
       video.duration &&
@@ -77,5 +82,5 @@ const isShortVideo = (
     minutes * 60 +
     seconds;
 
-  return totalSeconds < 60;
+  return totalSeconds <= SHORTS_MAX_SECONDS;
 };

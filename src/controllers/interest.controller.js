@@ -1,5 +1,5 @@
 import Interest from "../models/Interest.js";
-import { searchYouTube } from "../services/youtube.service.js";
+import { getYouTubeSuggestions } from "../services/youtube.service.js";
 
 export const getInterests = async (req, res, next) => {
   try {
@@ -32,94 +32,39 @@ export const searchInterests = async (
       });
     }
 
-    const searchResults =
-      await searchYouTube(
-        query,
-        {
-          maxResults: 5,
-          order: "relevance",
-        }
-      );
+    // YouTube's own search autocomplete: every phrase is a
+    // real search that returns videos.
+    const phrases =
+      await getYouTubeSuggestions(query);
 
-    const suggestions = [];
+    const suggestions = phrases.map((name) => ({
+      _id: `youtube-${name.toLowerCase()}`,
+      name,
+      category: "YouTube",
+      isSuggested: true,
+      isDynamic: true,
+    }));
 
-    const seen = new Set();
+    const queryKey = query.toLowerCase();
 
-    for (
-      const item of
-        searchResults.items || []
+    if (
+      !suggestions.some(
+        (item) =>
+          item.name.toLowerCase() === queryKey
+      )
     ) {
-      const title =
-        item.snippet?.title?.trim();
-
-      if (!title) {
-        continue;
-      }
-
-      const cleanedTitle =
-        title
-          .replace(/\[[^\]]*\]/g, "")
-          .replace(/\([^)]*\)/g, "")
-          .replace(/\s+/g, " ")
-          .trim();
-
-      if (!cleanedTitle) {
-        continue;
-      }
-
-      const key =
-        cleanedTitle.toLowerCase();
-
-      if (seen.has(key)) {
-        continue;
-      }
-
-      seen.add(key);
-
-      suggestions.push({
-        _id:
-          `youtube-${
-            item.id?.videoId ||
-            key
-          }`,
-
-        name: cleanedTitle,
-
-        category: "YouTube",
-
-        isSuggested: true,
-
-        isDynamic: true,
-      });
-
-      if (
-        suggestions.length >= 5
-      ) {
-        break;
-      }
-    }
-
-    const queryKey =
-      query.toLowerCase();
-
-    if (!seen.has(queryKey)) {
       suggestions.unshift({
-        _id:
-          `query-${queryKey}`,
-
+        _id: `query-${queryKey}`,
         name: query,
-
         category: "YouTube",
-
         isSuggested: true,
-
         isDynamic: true,
       });
     }
 
     return res.status(200).json({
       success: true,
-      data: suggestions.slice(0, 6),
+      data: suggestions.slice(0, 10),
     });
   } catch (error) {
     if (
