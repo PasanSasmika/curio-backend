@@ -3,7 +3,7 @@ import {
   getYouTubeVideoDetails,
 } from "../services/youtube.service.js";
 
-import { filterYouTubeContent } from "../utils/ContentFilter.js";
+import { filterYouTubeContent } from "../utils/contentFilter.js";
 import Content from "../models/Content.js";
 
 const ALLOWED_ORDERS = [
@@ -16,88 +16,92 @@ const ALLOWED_ORDERS = [
 const MAX_HOME_PAGES = 6;
 const DEFAULT_LIMIT = 10;
 
-/*
- * --------------------------------------------------
- * Convert YouTube results into Curio content objects
- * --------------------------------------------------
- */
+const REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 
-const buildYouTubeVideos = (
+const refreshCache = new Map();
+
+const buildYouTubeVideos = async (
   searchResults,
   interest = null
 ) => {
-  const videoIds = searchResults.items
+  const videoIds = (searchResults.items || [])
     .map((item) => item.id?.videoId)
     .filter(Boolean);
 
-  return getYouTubeVideoDetails(videoIds).then(
-    (details) => {
-      const detailsMap = new Map(
-        details.map((video) => [video.id, video])
-      );
+  if (videoIds.length === 0) {
+    return [];
+  }
 
-      return searchResults.items
-        .map((item) => {
-          const video = detailsMap.get(
-            item.id?.videoId
-          );
+  const details =
+    await getYouTubeVideoDetails(videoIds);
 
-          if (!video) {
-            return null;
-          }
-
-          return {
-            videoId: video.id,
-
-            title: video.snippet.title,
-
-            description:
-              video.snippet.description,
-
-            thumbnail:
-              video.snippet.thumbnails?.medium?.url ??
-              video.snippet.thumbnails?.high?.url ??
-              null,
-
-            channelId:
-              video.snippet.channelId,
-
-            channelTitle:
-              video.snippet.channelTitle,
-
-            publishedAt:
-              video.snippet.publishedAt,
-
-            duration:
-              video.contentDetails?.duration ??
-              null,
-
-            viewCount:
-              Number(
-                video.statistics?.viewCount ?? 0
-              ),
-
-            ...(interest
-              ? {
-                  interest: interest.trim(),
-                }
-              : {}),
-
-            source: "youtube",
-          };
-        })
-        .filter(Boolean);
-    }
+  const detailsMap = new Map(
+    details.map((video) => [
+      video.id,
+      video,
+    ])
   );
+
+  return (searchResults.items || [])
+    .map((item) => {
+      const video =
+        detailsMap.get(
+          item.id?.videoId
+        );
+
+      if (!video) {
+        return null;
+      }
+
+      return {
+        videoId: video.id,
+
+        title:
+          video.snippet?.title || "",
+
+        description:
+          video.snippet?.description || "",
+
+        thumbnail:
+          video.snippet?.thumbnails?.medium?.url ??
+          video.snippet?.thumbnails?.high?.url ??
+          null,
+
+        channelId:
+          video.snippet?.channelId ?? null,
+
+        channelTitle:
+          video.snippet?.channelTitle ?? null,
+
+        publishedAt:
+          video.snippet?.publishedAt ?? null,
+
+        duration:
+          video.contentDetails?.duration ?? null,
+
+        viewCount:
+          Number(
+            video.statistics?.viewCount ?? 0
+          ),
+
+        ...(interest
+          ? {
+              interest:
+                interest.trim(),
+            }
+          : {}),
+
+        source: "youtube",
+      };
+    })
+    .filter(Boolean);
 };
 
-/*
- * --------------------------------------------------
- * Save YouTube videos to MongoDB
- * --------------------------------------------------
- */
-
 const saveVideos = async (videos) => {
+  if (!videos.length) {
+    return [];
+  }
+
   const savedVideos = [];
 
   for (const video of videos) {
@@ -108,7 +112,7 @@ const saveVideos = async (videos) => {
         },
         video,
         {
-          new: true,
+          returnDocument: "after",
           upsert: true,
           setDefaultsOnInsert: true,
         }
@@ -120,28 +124,62 @@ const saveVideos = async (videos) => {
   return savedVideos;
 };
 
-/*
- * --------------------------------------------------
- * Refresh content from YouTube
- *
- * This is used when the user pulls to refresh.
- * It searches recent uploads for the selected interest.
- * --------------------------------------------------
- */
+const canRefreshInterest = (interest) => {
+  const key = interest
+    .trim()
+    .toLowerCase();
+
+  const lastRefresh =
+    refreshCache.get(key);
+
+  if (!lastRefresh) {
+    return true;
+  }
+
+  return (
+    Date.now() - lastRefresh >=
+    REFRESH_COOLDOWN_MS
+  );
+};
+
+const markInterestRefreshed = (
+  interest
+) => {
+  const key = interest
+    .trim()
+    .toLowerCase();
+
+  refreshCache.set(
+    key,
+    Date.now()
+  );
+};
 
 const refreshInterestContent = async (
   interest
 ) => {
-  if (!interest) {
-    return;
+  if (!interest || !interest.trim()) {
+    return {
+      refreshed: false,
+      reason: "missing-interest",
+    };
+  }
+
+  if (!canRefreshInterest(interest)) {
+    return {
+      refreshed: false,
+      reason: "cooldown",
+    };
   }
 
   try {
+    markInterestRefreshed(interest);
+
     const searchResults =
       await searchYouTube(
         interest.trim(),
         {
-          maxResults: 20,
+          maxResults: 10,
           order: "date",
         }
       );
@@ -158,33 +196,25 @@ const refreshInterestContent = async (
     if (videos.length > 0) {
       await saveVideos(videos);
     }
+
+    return {
+      refreshed: true,
+      count: videos.length,
+    };
   } catch (error) {
     console.log(
-      `Failed to refresh "${interest}":`,
+      `YouTube refresh failed for "${interest}":`,
       error.message
     );
+
+    return {
+      refreshed: false,
+      reason:
+        error.code ||
+        "youtube-request-failed",
+    };
   }
 };
-
-/*
- * --------------------------------------------------
- * GET HOME CONTENT
- *
- * Supports:
- *
- * ?page=1
- * ?page=2
- * ?page=3
- * ...
- * ?page=6
- *
- * ?limit=10
- *
- * ?interest=React%20Native
- *
- * ?refresh=true
- * --------------------------------------------------
- */
 
 export const getContent = async (
   req,
@@ -202,10 +232,6 @@ export const getContent = async (
     const parsedPage = Number(page);
     const parsedLimit = Number(limit);
 
-    /*
-     * Validate page
-     */
-
     if (
       !Number.isInteger(parsedPage) ||
       parsedPage < 1
@@ -217,10 +243,6 @@ export const getContent = async (
       });
     }
 
-    /*
-     * We only expose pages 1-6 in the Home UI.
-     */
-
     if (parsedPage > MAX_HOME_PAGES) {
       return res.status(400).json({
         success: false,
@@ -228,10 +250,6 @@ export const getContent = async (
           `Home supports up to ${MAX_HOME_PAGES} pages`,
       });
     }
-
-    /*
-     * Validate limit
-     */
 
     if (
       !Number.isInteger(parsedLimit) ||
@@ -245,36 +263,6 @@ export const getContent = async (
       });
     }
 
-    /*
-     * --------------------------------------------------
-     * Refresh from YouTube
-     *
-     * Only refresh when explicitly requested.
-     * This prevents every normal page change from
-     * consuming YouTube API quota.
-     * --------------------------------------------------
-     */
-
-    const shouldRefresh =
-      refresh === "true" ||
-      refresh === "1";
-
-    if (
-      shouldRefresh &&
-      interest &&
-      interest.trim()
-    ) {
-      await refreshInterestContent(
-        interest
-      );
-    }
-
-    /*
-     * --------------------------------------------------
-     * MongoDB filter
-     * --------------------------------------------------
-     */
-
     const filter = {};
 
     if (interest && interest.trim()) {
@@ -282,20 +270,29 @@ export const getContent = async (
         interest.trim();
     }
 
+    /*
+     * Only refresh when explicitly requested.
+     *
+     * The cooldown prevents repeated
+     * YouTube requests for the same interest.
+     */
+    let refreshResult = null;
+
+    if (
+      (refresh === "true" ||
+        refresh === "1") &&
+      interest &&
+      interest.trim()
+    ) {
+      refreshResult =
+        await refreshInterestContent(
+          interest
+        );
+    }
+
     const skip =
       (parsedPage - 1) *
       parsedLimit;
-
-    /*
-     * --------------------------------------------------
-     * Feed ordering
-     *
-     * Newer videos appear first.
-     *
-     * createdAt is used as a secondary sort so
-     * newly discovered videos are also considered.
-     * --------------------------------------------------
-     */
 
     const [content, total] =
       await Promise.all([
@@ -325,13 +322,9 @@ export const getContent = async (
 
       pagination: {
         page: parsedPage,
-
         limit: parsedLimit,
-
         total,
-
         totalPages,
-
         maxPages: MAX_HOME_PAGES,
 
         hasNextPage:
@@ -340,19 +333,13 @@ export const getContent = async (
         hasPreviousPage:
           parsedPage > 1,
       },
+
+      refresh: refreshResult,
     });
   } catch (error) {
     next(error);
   }
 };
-
-/*
- * --------------------------------------------------
- * SEARCH CONTENT
- *
- * This continues to search YouTube directly.
- * --------------------------------------------------
- */
 
 export const searchContent = async (
   req,
@@ -399,23 +386,18 @@ export const searchContent = async (
       });
     }
 
-    /*
-     * Search YouTube
-     */
-
     const searchResults =
       await searchYouTube(
         q.trim(),
         {
           pageToken,
-          maxResults: parsedLimit,
+          maxResults: Math.min(
+            parsedLimit,
+            10
+          ),
           order,
         }
       );
-
-    /*
-     * Get complete video details
-     */
 
     const videos =
       await buildYouTubeVideos(
@@ -443,19 +425,21 @@ export const searchContent = async (
       },
     });
   } catch (error) {
+    if (
+      error.status === 429 ||
+      error.code ===
+        "YOUTUBE_RATE_LIMIT"
+    ) {
+      return res.status(429).json({
+        success: false,
+        message:
+          "YouTube is temporarily rate limited. Please try again later.",
+      });
+    }
+
     next(error);
   }
 };
-
-/*
- * --------------------------------------------------
- * DISCOVER CONTENT
- *
- * Used by the Interests screen.
- *
- * Searches relevant content and saves it to MongoDB.
- * --------------------------------------------------
- */
 
 export const discoverContent = async (
   req,
@@ -477,41 +461,56 @@ export const discoverContent = async (
     }
 
     /*
-     * First get relevant videos.
+     * First check whether MongoDB already
+     * contains content for this interest.
+     *
+     * This prevents unnecessary YouTube
+     * API calls every time Discover is pressed.
      */
+    const existingContent =
+      await Content.find({
+        interest: interest.trim(),
+      })
+        .sort({
+          publishedAt: -1,
+          createdAt: -1,
+        })
+        .limit(10)
+        .lean();
 
-    const relevanceResults =
+    if (existingContent.length > 0) {
+      return res.status(200).json({
+        success: true,
+        message:
+          "Existing content returned",
+        count: existingContent.length,
+        data: existingContent,
+        source: "database",
+      });
+    }
+
+    const searchResults =
       await searchYouTube(
         interest.trim(),
         {
-          maxResults: 20,
+          maxResults: 10,
           order: "relevance",
         }
       );
 
     let videos =
       await buildYouTubeVideos(
-        relevanceResults,
+        searchResults,
         interest
       );
-
-    /*
-     * Filter Shorts / low-quality entries.
-     */
 
     videos =
       filterYouTubeContent(
         videos
       );
 
-    /*
-     * Save to MongoDB.
-     */
-
     const savedVideos =
-      await saveVideos(
-        videos
-      );
+      await saveVideos(videos);
 
     res.status(200).json({
       success: true,
@@ -522,8 +521,23 @@ export const discoverContent = async (
       count: savedVideos.length,
 
       data: savedVideos,
+
+      source: "youtube",
     });
   } catch (error) {
+    if (
+      error.status === 429 ||
+      error.code ===
+        "YOUTUBE_RATE_LIMIT"
+    ) {
+      return res.status(429).json({
+        success: false,
+        message:
+          "YouTube is temporarily rate limited. Please try again later.",
+        data: [],
+      });
+    }
+
     next(error);
   }
 };

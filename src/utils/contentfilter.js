@@ -1,20 +1,81 @@
-export const filterYouTubeContent = (videos) => {
+export const filterYouTubeContent = (
+  videos
+) => {
   return videos.filter((video) => {
-    if (!video.videoId) return false;
-    if (!video.title) return false;
-
-    // Remove YouTube Shorts
-    const title = video.title.toLowerCase();
-
-    if (title.includes("#shorts")) {
+    if (!video?.videoId) {
       return false;
     }
 
-    // Ignore videos with extremely low view count
-    if (video.viewCount < 10) {
+    if (!video?.title) {
+      return false;
+    }
+
+    /*
+     * Remove videos explicitly marked
+     * as Shorts in their title.
+     */
+    const title =
+      video.title.toLowerCase();
+
+    if (
+      title.includes("#shorts") ||
+      title.includes("#short")
+    ) {
+      return false;
+    }
+
+    /*
+     * Remove videos shorter than 60 seconds.
+     */
+    if (
+      video.duration &&
+      isShortVideo(video.duration)
+    ) {
+      return false;
+    }
+
+    /*
+     * Ignore videos with almost no views.
+     */
+    if (
+      Number(video.viewCount || 0) < 10
+    ) {
       return false;
     }
 
     return true;
   });
+};
+
+const isShortVideo = (
+  duration
+) => {
+  if (!duration) {
+    return false;
+  }
+
+  const match =
+    duration.match(
+      /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/
+    );
+
+  if (!match) {
+    return false;
+  }
+
+  const hours =
+    Number(match[1] || 0);
+
+  const minutes =
+    Number(match[2] || 0);
+
+  const seconds =
+    Number(match[3] || 0);
+
+  const totalSeconds =
+    hours * 60 * 60 +
+    minutes * 60 +
+    seconds;
+
+  return totalSeconds < 60;
 };

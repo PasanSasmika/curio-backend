@@ -1,4 +1,5 @@
 import Interest from "../models/Interest.js";
+import { searchYouTube } from "../services/youtube.service.js";
 
 export const getInterests = async (req, res, next) => {
   try {
@@ -15,94 +16,125 @@ export const getInterests = async (req, res, next) => {
   }
 };
 
-export const searchInterests = async (req, res, next) => {
+export const searchInterests = async (
+  req,
+  res,
+  next
+) => {
   try {
-    const query = req.query.q?.trim();
+    const query =
+      req.query.q?.trim();
 
-    if (!query) {
+    if (!query || query.length < 2) {
       return res.status(200).json({
         success: true,
         data: [],
       });
     }
 
-    /*
-     * --------------------------------------------------
-     * 1. Find matching interests from MongoDB
-     * --------------------------------------------------
-     */
+    const searchResults =
+      await searchYouTube(
+        query,
+        {
+          maxResults: 5,
+          order: "relevance",
+        }
+      );
 
-    const databaseInterests = await Interest.find({
-      name: {
-        $regex: query,
-        $options: "i",
-      },
-    })
-      .sort({ name: 1 })
-      .limit(10)
-      .lean();
+    const suggestions = [];
 
-    /*
-     * --------------------------------------------------
-     * 2. Generate broader suggestions
-     *
-     * These don't need to exist in MongoDB.
-     * This allows searches such as:
-     *
-     * Hindi Songs
-     * Sinhala Songs
-     * Football Highlights
-     * Laravel Tutorial
-     * Travel Sri Lanka
-     * Gaming News
-     * etc.
-     * --------------------------------------------------
-     */
+    const seen = new Set();
 
-    const suggestions = generateSuggestions(query);
+    for (
+      const item of
+        searchResults.items || []
+    ) {
+      const title =
+        item.snippet?.title?.trim();
 
-    /*
-     * --------------------------------------------------
-     * 3. Combine database interests + generated
-     *    suggestions without duplicates
-     * --------------------------------------------------
-     */
+      if (!title) {
+        continue;
+      }
 
-    const existingNames = new Set(
-      databaseInterests.map((interest) =>
-        interest.name.toLowerCase()
-      )
-    );
+      const cleanedTitle =
+        title
+          .replace(/\[[^\]]*\]/g, "")
+          .replace(/\([^)]*\)/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
 
-    const generatedInterests = suggestions
-      .filter(
-        (name) =>
-          !existingNames.has(name.toLowerCase())
-      )
-      .map((name, index) => ({
-        _id: `suggestion-${index}-${name
-          .toLowerCase()
-          .replace(/\s+/g, "-")}`,
+      if (!cleanedTitle) {
+        continue;
+      }
 
-        name,
+      const key =
+        cleanedTitle.toLowerCase();
 
-        category: getCategory(name),
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+
+      suggestions.push({
+        _id:
+          `youtube-${
+            item.id?.videoId ||
+            key
+          }`,
+
+        name: cleanedTitle,
+
+        category: "YouTube",
 
         isSuggested: true,
 
         isDynamic: true,
-      }));
+      });
 
-    const results = [
-      ...databaseInterests,
-      ...generatedInterests,
-    ].slice(0, 20);
+      if (
+        suggestions.length >= 5
+      ) {
+        break;
+      }
+    }
 
-    res.status(200).json({
+    const queryKey =
+      query.toLowerCase();
+
+    if (!seen.has(queryKey)) {
+      suggestions.unshift({
+        _id:
+          `query-${queryKey}`,
+
+        name: query,
+
+        category: "YouTube",
+
+        isSuggested: true,
+
+        isDynamic: true,
+      });
+    }
+
+    return res.status(200).json({
       success: true,
-      data: results,
+      data: suggestions.slice(0, 6),
     });
   } catch (error) {
+    if (
+      error.status === 429 ||
+      error.code ===
+        "YOUTUBE_RATE_LIMIT"
+    ) {
+      return res.status(429).json({
+        success: false,
+        message:
+          "YouTube suggestions are temporarily unavailable.",
+        data: [],
+      });
+    }
+
     next(error);
   }
 };
