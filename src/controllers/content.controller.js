@@ -6,7 +6,7 @@ import {
 import {
   filterYouTubeContent,
   SHORT_DURATION_REGEX,
-} from "../utils/contentFilter.js";
+} from "../utils/contentFilter.js"; 
 
 import Content from "../models/Content.js";
 import UserPreferences from "../models/UserPreferences.js";
